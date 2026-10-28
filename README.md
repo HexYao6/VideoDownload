@@ -9,11 +9,16 @@
 
 - Python >= 3.11
 - [uv](https://docs.astral.sh/uv/)（推荐）
+- **ffmpeg**（必需）：`bestvideo+bestaudio` 需要它把音视频流合并成 mp4，缺失时 yt-dlp 会直接中止
 
 ## 安装
 
 ```bash
 uv sync
+
+# 系统依赖（ffmpeg）
+apt-get install ffmpeg      # Debian / Ubuntu
+brew install ffmpeg         # macOS
 ```
 
 ## 使用
@@ -46,6 +51,17 @@ download_bilibili_video("BV1dfJk6hEjX", cookie=("chrome",))
 ```
 
 > `cookies.txt` 与 `cookies/` 已在 `.gitignore` 中忽略，避免误提交登录凭证。
+
+### 风控与网络
+
+B 站有较强的风控，程序已做三层处理：
+
+1. **伪装浏览器 UA** —— 否则接口会直接返回 `412` 风控页；
+2. **伪装 TLS 指纹**（`curl_cffi` 的 `impersonate`）—— 仅改 UA 仍会被识别并限流；
+3. **重试** —— 页面、接口、封面与整体提取都带退避重试，应对链路抖动。
+
+> 若所在网络的出口对 B 站存在干扰（连接被挂起或中途重置），下载仍可能失败。
+> 此时建议配置 `cookies.txt`（登录态请求通常不受未登录风控限制），或在网络正常的机器上运行。
 
 ## 输出结构
 

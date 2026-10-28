@@ -7,11 +7,14 @@
 """
 
 import json
+import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 
-import requests
 import yt_dlp
+from curl_cffi import requests
+from yt_dlp.networking.impersonate import ImpersonateTarget
 from yt_dlp.utils import sanitize_filename
 
 # ==================== 可配置变量 ====================
@@ -39,6 +42,31 @@ TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 # Cookie 文件路径（用于解锁大会员画质）
 COOKIE_FILE_PATH = r"cookies.txt"
 
+# 请求 User-Agent
+# B 站风控会针对 yt-dlp 默认 UA（Firefox）挂起连接不放包，表现为读取超时，
+# 必须伪装成浏览器 UA 才能正常取到页面与接口数据
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
+# 网络读写超时（秒）：B 站风控链路时快时慢，yt-dlp 默认 20s 容易超时
+SOCKET_TIMEOUT = 60
+
+# 浏览器指纹伪装目标
+# B 站风控会校验 TLS/HTTP2 指纹，只改 User-Agent 仍会被限流甚至挂起连接，
+# 需要用 curl_cffi 完整模拟浏览器握手才能稳定拿到页面与接口数据
+IMPERSONATE_NAME = "chrome"
+IMPERSONATE_TARGET = ImpersonateTarget.from_str(IMPERSONATE_NAME)
+
+# 单次请求的重试次数与重试间隔基数（秒）
+MAX_RETRIES = 3
+RETRY_BACKOFF = 3
+
+# 整体提取的重试次数
+# B 站风控叠加链路不稳定，单次提取成功率偏低，这里对整个提取过程重试
+MAX_ATTEMPTS = 5
+
 
 # ====================================================
 
@@ -65,18 +93,31 @@ def _pick_thumbnail(info: dict) -> tuple[str, str]:
 
 
 def _download_thumbnail(thumb_url: str, save_path: Path) -> None:
-    """下载封面到指定路径（B 站图片 CDN 需带 Referer，否则可能 403）。"""
+    """下载封面到指定路径（B 站图片 CDN 需带 Referer，否则可能 403）。
+
+    CDN 链路时快时慢且偶发断连，这里带指数退避重试。
+    """
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Referer": "https://www.bilibili.com/",
     }
-    resp = requests.get(thumb_url, headers=headers, stream=True)
-    resp.raise_for_status()
-    with open(save_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=8192):
-            if chunk:
-                f.write(chunk)
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.get(
+                thumb_url,
+                headers=headers,
+                impersonate=IMPERSONATE_NAME,
+                timeout=SOCKET_TIMEOUT,
+            )
+            resp.raise_for_status()
+            save_path.write_bytes(resp.content)
+            return
+        except Exception as exc:
+            last_error = exc
+            print(f"⚠️ 封面下载失败（第 {attempt}/{MAX_RETRIES} 次）: {exc}")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_BACKOFF * attempt)
+    raise RuntimeError(f"封面下载失败: {thumb_url}") from last_error
 
 
 def _load_json(path: Path, default):
@@ -147,6 +188,41 @@ def _apply_cookie_opts(ydl_opts: dict, cookie) -> None:
         print("⚠️ 未提供有效 Cookie，未登录状态下无法下载 1080P60 等大会员画质。")
 
 
+def _check_ffmpeg() -> None:
+    """检查 ffmpeg 是否可用。
+
+    bestvideo+bestaudio 需要 ffmpeg 合并音视频流，缺失时 yt-dlp 会直接中止，
+    这里提前给出明确的安装提示。
+    """
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError(
+            "未找到 ffmpeg：当前格式 bestvideo+bestaudio 需要 ffmpeg 合并音视频流。\n"
+            "请先安装 ffmpeg（如 apt-get install ffmpeg、brew install ffmpeg），"
+            '或改用单一格式（format="best"）。'
+        )
+
+
+def _extract_with_retry(ydl_opts: dict, video_url: str) -> dict:
+    """带退避重试地提取并下载视频信息。
+
+    B 站风控会主动挂起/重置连接（表现为读取超时、TLS 握手被杀、响应体截断），
+    单次成功率不稳定，这里对整个提取过程重试；每次重建 YoutubeDL 实例，
+    避免失败请求的内部状态（如 wbi 签名缓存）影响后续重试。
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(video_url, download=True)
+        except Exception as exc:
+            last_error = exc
+            detail = str(exc).splitlines()[0][:120] if str(exc) else exc
+            print(f"⚠️ 提取失败（第 {attempt}/{MAX_ATTEMPTS} 次）: {detail}")
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(RETRY_BACKOFF * attempt * 2)
+    raise RuntimeError(f"视频信息提取失败: {video_url}") from last_error
+
+
 def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, cookie=None) -> str:
     """根据 BV 号使用 yt-dlp 下载 B 站视频。
 
@@ -173,6 +249,8 @@ def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, co
     if not bvid.startswith("BV"):
         raise ValueError(f"无效的 B 站 BV 号: {bvid}")
 
+    _check_ffmpeg()
+
     video_url = f"{BILIBILI_URL_PREFIX}{bvid}"
 
     # 输出模板：以 up 主名称作为子文件夹，视频文件以 BV 号命名
@@ -183,6 +261,11 @@ def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, co
         "outtmpl": outtmpl,
         "merge_output_format": "mp4",
         "noplaylist": True,
+        # 伪装浏览器指纹 + UA，并放宽超时，绕开 B 站风控导致的限流与读取超时
+        "impersonate": IMPERSONATE_TARGET,
+        "user_agent": USER_AGENT,
+        "socket_timeout": SOCKET_TIMEOUT,
+        "retries": MAX_RETRIES,
     }
 
     # 根据可选参数自由切换 Cookie 来源（文件 / 浏览器 / 默认）
@@ -190,8 +273,7 @@ def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, co
 
     print(f"🔗 待下载视频 URL: {video_url}")
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=True)
+    info = _extract_with_retry(ydl_opts, video_url)
 
     uploader = info.get("uploader") or info.get("channel") or "unknown_uploader"
     uploader_id = info.get("uploader_id") or info.get("channel_id") or ""

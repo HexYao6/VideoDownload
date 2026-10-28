@@ -4,4 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "yt-dlp[default]>=2026.8.19",
+    # B 站风控校验 TLS 指纹，需用 curl_cffi 伪装浏览器；
+    # yt-dlp 2026.8.19 仅支持 curl_cffi 0.5.10 与 0.10.x~0.16.x
+    "curl-cffi>=0.16,<0.17",
 ]

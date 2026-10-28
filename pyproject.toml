@@ -7,4 +7,11 @@ dependencies = [
     # B 站风控校验 TLS 指纹，需用 curl_cffi 伪装浏览器；
     # yt-dlp 2026.8.19 仅支持 curl_cffi 0.5.10 与 0.10.x~0.16.x
     "curl-cffi>=0.16,<0.17",
+    # WebUI
+    "starlette>=0.37",
+    "uvicorn[standard]>=0.30",
+    "aiofiles>=23.2",
 ]
+
+[project.scripts]
+videodownload-web = "webui.__main__:main"

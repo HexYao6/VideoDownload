@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VideoDownload</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">🎬 VideoDownload</a>
+    <nav class="nav">
+      <a href="/" data-route="library">视频库</a>
+      <a href="/download" data-route="download">下载</a>
+    </nav>
+    <button class="ghost" id="refresh-btn" title="重新扫描下载目录">↻ 刷新</button>
+  </header>
+
+  <main id="app" class="app">
+    <div class="loading">加载中…</div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

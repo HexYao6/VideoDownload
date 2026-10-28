@@ -5,6 +5,8 @@
 基于 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 下载 B 站视频，按 up 主自动分目录保存，
 同时下载封面并维护 up 主 / 视频的 json 索引。
 
+附带一个简易 WebUI：浏览已下载的 up 主 / 视频、在线播放，也可以直接输入 BV 号下载。
+
 ## 环境要求
 
 - Python >= 3.11
@@ -35,6 +37,31 @@ uv run python Bilibili/main.py
 from Bilibili.main import download_bilibili_video
 
 download_bilibili_video("BV1dfJk6hEjX")
+```
+
+### WebUI
+
+```bash
+uv run python -m webui                      # 默认 127.0.0.1:8000
+uv run python -m webui --host 0.0.0.0 --port 8080
+```
+
+界面分三层：
+
+| 页面 | 路径 | 说明 |
+| --- | --- | --- |
+| 视频库 | `/` | 按 up 主分组展示所有已下载内容 |
+| up 主详情 | `/u/<up主名>` | 该 up 主下的视频列表（封面 + 名称 + 简介） |
+| 播放页 | `/v/<BV号>` | 在线播放，显示标题、时长与简介 |
+| 下载 | `/download` | 输入 BV 号即可下载，页面实时显示进度与日志 |
+
+前端是原生 JS + JSON 接口，没有额外的模板引擎依赖。
+
+**回填视频简介**：早期版本下载的视频没有记录简介，可用下面的命令补齐：
+
+```bash
+uv run python -m webui.backfill           # 只补缺失的
+uv run python -m webui.backfill --force   # 强制重新抓取
 ```
 
 ### Cookie（可选）
@@ -77,7 +104,7 @@ downloads/
 ```
 
 - `up.json`：记录 up 主名称、uid，以及该 up 主下已下载视频的 BV 号列表（增量、去重、按 BV 号排序）
-- `videos.json`：以 BV 号为 key 记录视频名称、封面与下载更新时间（增量、覆盖、按 BV 号排序）
+- `videos.json`：以 BV 号为 key 记录视频名称、封面、简介、时长与下载更新时间（增量、覆盖、按 BV 号排序）
 
 ## 配置项
 
@@ -88,5 +115,10 @@ downloads/
 | `DOWNLOAD_DIR_PATH` | `<项目根>/downloads` | 视频保存目录 |
 | `BILIBILI_URL_PREFIX` | `https://www.bilibili.com/video/` | 视频 URL 前缀 |
 | `COOKIE_FILE_PATH` | `cookies.txt` | Cookie 文件路径 |
+| `USER_AGENT` | Chrome/131 | 请求 UA，需伪装成浏览器以绕过风控 |
+| `IMPERSONATE_NAME` | `chrome` | TLS 指纹伪装目标 |
+| `SOCKET_TIMEOUT` | 60 | 单次请求超时（秒） |
+| `MAX_RETRIES` | 3 | 单个请求的重试次数 |
+| `MAX_ATTEMPTS` | 5 | 整体提取的重试次数 |
 | `UP_INFO_FILE_NAME` | `up.json` | up 主信息文件名 |
 | `VIDEO_INFO_FILE_NAME` | `videos.json` | 视频明细文件名 |

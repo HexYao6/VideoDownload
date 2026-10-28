@@ -223,6 +223,42 @@ def _extract_with_retry(ydl_opts: dict, video_url: str) -> dict:
     raise RuntimeError(f"视频信息提取失败: {video_url}") from last_error
 
 
+def _normalize_duration(value) -> int | None:
+    """把时长统一成整数秒（yt-dlp 可能返回 float）。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
+def _build_ydl_opts(outtmpl: str, cookie=None) -> dict:
+    """构造 yt-dlp 参数。"""
+    ydl_opts = {
+        "format": "bestvideo+bestaudio/best",
+        "outtmpl": outtmpl,
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        # 伪装浏览器指纹 + UA，并放宽超时，绕开 B 站风控导致的限流与读取超时
+        "impersonate": IMPERSONATE_TARGET,
+        "user_agent": USER_AGENT,
+        "socket_timeout": SOCKET_TIMEOUT,
+        "retries": MAX_RETRIES,
+    }
+
+    # 根据可选参数自由切换 Cookie 来源（文件 / 浏览器 / 默认）
+    _apply_cookie_opts(ydl_opts, cookie)
+    return ydl_opts
+
+
+def fetch_video_info(bvid: str, cookie=None) -> dict:
+    """只获取视频信息（不下载文件），用于回填简介等元数据。"""
+    if not bvid or not bvid.startswith("BV"):
+        raise ValueError(f"无效的 B 站 BV 号: {bvid}")
+
+    ydl_opts = _build_ydl_opts(outtmpl=f"{bvid}.%(ext)s", cookie=cookie)
+    ydl_opts["skip_download"] = True
+    return _extract_with_retry(ydl_opts, f"{BILIBILI_URL_PREFIX}{bvid}")
+
+
 def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, cookie=None) -> str:
     """根据 BV 号使用 yt-dlp 下载 B 站视频。
 
@@ -256,20 +292,7 @@ def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, co
     # 输出模板：以 up 主名称作为子文件夹，视频文件以 BV 号命名
     outtmpl = str(Path(download_dir) / "%(uploader)s" / f"{bvid}.%(ext)s")
 
-    ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
-        "outtmpl": outtmpl,
-        "merge_output_format": "mp4",
-        "noplaylist": True,
-        # 伪装浏览器指纹 + UA，并放宽超时，绕开 B 站风控导致的限流与读取超时
-        "impersonate": IMPERSONATE_TARGET,
-        "user_agent": USER_AGENT,
-        "socket_timeout": SOCKET_TIMEOUT,
-        "retries": MAX_RETRIES,
-    }
-
-    # 根据可选参数自由切换 Cookie 来源（文件 / 浏览器 / 默认）
-    _apply_cookie_opts(ydl_opts, cookie)
+    ydl_opts = _build_ydl_opts(outtmpl, cookie=cookie)
 
     print(f"🔗 待下载视频 URL: {video_url}")
 
@@ -304,6 +327,8 @@ def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, co
     video_record = {
         "视频名称": title,
         "视频封面": cover_name,
+        "视频简介": (info.get("description") or "").strip(),
+        "视频时长": _normalize_duration(info.get("duration")),
         "视频下载与更新时间": datetime.now().strftime(TIME_FORMAT),
     }
     videos_path = uploader_dir / VIDEO_INFO_FILE_NAME

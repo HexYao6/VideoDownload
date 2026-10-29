@@ -42,9 +42,13 @@ download_bilibili_video("BV1dfJk6hEjX")
 ### WebUI
 
 ```bash
-uv run python -m webui                      # 默认 127.0.0.1:8000
-uv run python -m webui --host 0.0.0.0 --port 8080
+uv run python -m webui                          # 默认监听 0.0.0.0:8000（局域网可访问）
+uv run python -m webui --host 127.0.0.1         # 仅本机访问
+uv run python -m webui --port 8080
 ```
+
+启动后终端会打印本机地址和局域网地址，例如 `http://192.168.5.47:8000`，
+同一局域网的设备（手机、电视、其它电脑）直接用浏览器打开即可。
 
 界面分三层：
 
@@ -56,6 +60,35 @@ uv run python -m webui --host 0.0.0.0 --port 8080
 | 下载 | `/download` | 输入 BV 号即可下载，页面实时显示进度与日志 |
 
 前端是原生 JS + JSON 接口，没有额外的模板引擎依赖。
+
+#### 访问口令（局域网共享时建议开启）
+
+不设口令时，同网段任何设备都能打开页面并触发下载。设置环境变量即可启用：
+
+```bash
+export VIDEODOWNLOAD_TOKEN=你的口令
+uv run python -m webui
+```
+
+之后访问 `http://<本机IP>:8000/?token=你的口令` 校验通过会写入 Cookie，
+后续（含视频播放）无需再带参数。也支持 `X-Token` 请求头。
+
+#### 作为系统服务常驻
+
+仓库里提供了 systemd 配置：
+
+```bash
+sudo cp deploy/videodownload-webui.service /etc/systemd/system/
+sudo cp deploy/videodownload-webui.env.example /etc/videodownload-webui.env
+sudo chmod 600 /etc/videodownload-webui.env
+sudo nano /etc/videodownload-webui.env        # 填入口令
+sudo systemctl daemon-reload
+sudo systemctl enable --now videodownload-webui
+
+journalctl -u videodownload-webui -f          # 看日志
+```
+
+> unit 里的 `WorkingDirectory` 与 `ExecStart` 指向项目实际路径，换目录时记得改。
 
 **回填视频简介**：早期版本下载的视频没有记录简介，可用下面的命令补齐：
 

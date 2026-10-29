@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 import uuid
@@ -17,8 +18,11 @@ from pathlib import Path
 from starlette.concurrency import run_in_threadpool
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-# main.py 里的 COOKIE_FILE_PATH 是相对当前工作目录的，这里按项目根目录解析
-COOKIE_FILE = PROJECT_ROOT / "cookies.txt"
+# main.py 里的 COOKIE_FILE_PATH 是相对当前工作目录的，这里按项目根目录解析；
+# 也可用环境变量 VIDEODOWNLOAD_COOKIE_FILE 指定其它位置
+COOKIE_FILE = Path(
+    os.environ.get("VIDEODOWNLOAD_COOKIE_FILE") or (PROJECT_ROOT / "cookies.txt")
+)
 
 # 任务保留时长（秒），超过后自动清理，避免内存无限增长
 TASK_TTL = 6 * 3600

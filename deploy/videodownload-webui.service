@@ -1,0 +1,28 @@
+[Unit]
+Description=VideoDownload WebUI (局域网视频库 / 下载)
+Documentation=https://github.com/HexYao6/VideoDownload
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 项目路径，如安装到别处请改这两行
+WorkingDirectory=/mnt/HHD/DSH_Space/VideoDownload
+EnvironmentFile=-/etc/videodownload-webui.env
+
+# 用 venv 里的 python 直接运行，不依赖运行时再调 uv
+ExecStart=/mnt/HHD/DSH_Space/VideoDownload/.venv/bin/python -m webui --host 0.0.0.0 --port 8000
+
+Restart=on-failure
+RestartSec=5
+# 进程被杀死后也要拉起来
+KillSignal=SIGINT
+TimeoutStopSec=15
+
+# 日志走 journald：journalctl -u videodownload-webui -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

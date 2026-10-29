@@ -12,10 +12,12 @@ import json
 from pathlib import Path
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from webui.auth import TokenAuthMiddleware
 from webui.library import find_video, load_library
 from webui.tasks import TaskManager, run_task
 
@@ -150,7 +152,10 @@ def create_app() -> Starlette:
         Route("/media/cover/{bvid}", media_cover),
         Mount("/static", StaticFiles(directory=STATIC_DIR), name="static"),
     ]
-    return Starlette(routes=routes)
+    return Starlette(
+        routes=routes,
+        middleware=[Middleware(TokenAuthMiddleware)],
+    )
 
 
 app = create_app()

@@ -12,7 +12,8 @@ WorkingDirectory=/mnt/HHD/DSH_Space/VideoDownload
 EnvironmentFile=-/etc/videodownload-webui.env
 
 # 用 venv 里的 python 直接运行，不依赖运行时再调 uv
-ExecStart=/mnt/HHD/DSH_Space/VideoDownload/.venv/bin/python -m webui --host 0.0.0.0 --port 8000
+# 监听地址与端口取自项目根目录的 config.json 的 server 节
+ExecStart=/mnt/HHD/DSH_Space/VideoDownload/.venv/bin/python -m webui
 
 Restart=on-failure
 RestartSec=5

@@ -1,7 +1,9 @@
 """WebUI 启动入口。
 
+监听地址与端口默认取自 config.json 的 server 节。
+
 用法：
-    uv run python -m webui                          # 默认监听 0.0.0.0:8000（局域网可访问）
+    uv run python -m webui                          # 用配置里的地址端口（局域网可访问）
     uv run python -m webui --host 127.0.0.1         # 仅本机访问
     uv run python -m webui --port 8080
 """
@@ -14,11 +16,12 @@ import sys
 
 import uvicorn
 
+import appconfig
 from webui.auth import TOKEN_ENV, get_token
 
-# 默认监听所有网卡，方便局域网内其他设备访问
-DEFAULT_HOST = "0.0.0.0"
-DEFAULT_PORT = 8000
+# 默认值取自 config.json 的 server 节
+DEFAULT_HOST = appconfig.server_host()
+DEFAULT_PORT = appconfig.server_port()
 
 
 def detect_lan_ip() -> str | None:

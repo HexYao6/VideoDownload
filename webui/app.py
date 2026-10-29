@@ -106,34 +106,61 @@ async def _find_media(bvid: str, *, video: bool) -> Path | None:
 
 
 async def api_download_start(request):
-    """提交下载任务。"""
+    """提交下载任务，支持一次提交多个 BV 号。"""
     try:
         payload = await request.json()
     except (json.JSONDecodeError, ValueError):
         return JSONResponse({"error": "请求体不是合法 JSON"}, status_code=400)
 
-    bvid = str(payload.get("bvid") or "").strip()
-    if not bvid:
-        return JSONResponse({"error": "请输入 BV 号"}, status_code=400)
-    if not bvid.startswith("BV"):
-        return JSONResponse({"error": "BV 号应以 BV 开头，例如 BV1dfJk6hEjX"}, status_code=400)
+    # 兼容单个 bvid 与批量 bvids 两种写法
+    raw = payload.get("bvids")
+    if raw is None:
+        raw = [payload.get("bvid")]
+    if not isinstance(raw, list):
+        raw = [raw]
 
-    task = manager.start(bvid)
-    asyncio.create_task(run_task(task))
-    return JSONResponse(task.to_dict())
+    bvids: list[str] = []
+    invalid: list[str] = []
+    for item in raw:
+        bvid = str(item or "").strip()
+        if not bvid:
+            continue
+        if not bvid.startswith("BV"):
+            invalid.append(bvid)
+            continue
+        if bvid not in bvids:
+            bvids.append(bvid)
+
+    if not bvids:
+        if invalid:
+            return JSONResponse(
+                {"error": f"BV 号应以 BV 开头，例如 BV1dfJk6hEjX（无效：{', '.join(invalid)}）"},
+                status_code=400,
+            )
+        return JSONResponse({"error": "请输入 BV 号"}, status_code=400)
+
+    semaphore = manager._get_semaphore()
+    tasks = []
+    for bvid in bvids:
+        task = manager.start(bvid)
+        asyncio.create_task(run_task(task, semaphore))
+        tasks.append(task)
+
+    return JSONResponse({"tasks": [t.to_dict() for t in tasks], "invalid": invalid})
+
+
+async def api_downloads(request):
+    """列出全部下载任务（用于页面恢复与多任务并行展示）。"""
+    return JSONResponse({"tasks": [t.to_dict() for t in manager.list()]})
 
 
 async def api_download_status(request):
-    """查询下载任务状态与增量日志。"""
+    """查询单个下载任务的状态与进度。"""
     task_id = request.path_params["task_id"]
     task = manager.get(task_id)
     if task is None:
         return JSONResponse({"error": "任务不存在或已过期"}, status_code=404)
-    try:
-        offset = int(request.query_params.get("offset", 0))
-    except ValueError:
-        offset = 0
-    return JSONResponse(task.to_dict(offset))
+    return JSONResponse(task.to_dict())
 
 
 def create_app() -> Starlette:
@@ -147,6 +174,7 @@ def create_app() -> Starlette:
         Route("/api/uploaders/{name}", api_uploader),
         Route("/api/videos/{bvid}", api_video),
         Route("/api/download", api_download_start, methods=["POST"]),
+        Route("/api/downloads", api_downloads),
         Route("/api/download/{task_id}", api_download_status),
         Route("/media/video/{bvid}", media_video),
         Route("/media/cover/{bvid}", media_cover),

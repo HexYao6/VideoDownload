@@ -4,3 +4,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+
+# ffmpeg 可执行文件体积较大，不入库，只保留目录说明
+/tools/ffmpeg/*
+!/tools/ffmpeg/README.md

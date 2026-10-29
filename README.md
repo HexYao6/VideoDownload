@@ -18,10 +18,36 @@
 ```bash
 uv sync
 
-# 系统依赖（ffmpeg）
-apt-get install ffmpeg      # Debian / Ubuntu
-brew install ffmpeg         # macOS
+# ffmpeg：放到项目内的 tools/ffmpeg/ 即可，程序会优先用这里的
+#         获取方式见 tools/ffmpeg/README.md
+mkdir -p tools/ffmpeg && cp /path/to/ffmpeg /path/to/ffprobe tools/ffmpeg/
 ```
+
+## 配置
+
+常规配置集中在项目根目录的 `config.json`：
+
+```json
+{
+  "ffmpeg":   { "dir": "tools/ffmpeg", "path": "" },
+  "download": { "dir": "downloads" },
+  "cookie":   { "file": "cookies.txt" },
+  "server":   { "host": "0.0.0.0", "port": 8000 }
+}
+```
+
+| 配置项 | 说明 |
+| --- | --- |
+| `ffmpeg.dir` | ffmpeg 可执行文件所在目录，优先于系统 PATH |
+| `ffmpeg.path` | 直接指定 ffmpeg 可执行文件，留空则用上面的目录 |
+| `download.dir` | 视频保存目录 |
+| `cookie.file` | Cookie 文件路径 |
+| `server.host` / `server.port` | WebUI 监听地址与端口 |
+
+所有路径都相对项目根目录解析。环境变量可以覆盖配置：
+`VIDEODOWNLOAD_FFMPEG_PATH`、`VIDEODOWNLOAD_FFMPEG_DIR`、`VIDEODOWNLOAD_DOWNLOAD_DIR`、
+`VIDEODOWNLOAD_COOKIE_FILE`、`VIDEODOWNLOAD_HOST`、`VIDEODOWNLOAD_PORT`、
+`VIDEODOWNLOAD_CONCURRENCY`（同时下载数，默认 3）。
 
 ## 使用
 
@@ -55,9 +81,15 @@ uv run python -m webui --port 8080
 | 页面 | 路径 | 说明 |
 | --- | --- | --- |
 | 视频库 | `/` | 按 up 主分组展示所有已下载内容 |
-| up 主详情 | `/u/<up主名>` | 该 up 主下的视频列表（封面 + 名称 + 简介） |
-| 播放页 | `/v/<BV号>` | 在线播放，显示标题、时长与简介 |
-| 下载 | `/download` | 输入 BV 号即可下载，页面实时显示进度与日志 |
+| up 主详情 | `/u/<up主名>` | 该 up 主下的视频列表（封面 + 名称 + 简介 + 清晰度） |
+| 播放页 | `/v/<BV号>` | 在线播放，显示标题、时长、清晰度与简介 |
+| 下载 | `/download` | 输入 BV 号即可下载，进度条实时显示，可多条并行 |
+
+下载页支持：
+
+- 一次粘贴多个 BV 号（空格 / 逗号 / 换行分隔），**多条视频并行下载**；
+- 从下拉框里直接挑选视频库中已有的视频重新下载（例如换了 cookie 后想要更高画质）；
+- 每个任务一条进度条，显示百分比、已下载字节、速度与剩余时间。
 
 前端是原生 JS + JSON 接口，没有额外的模板引擎依赖。
 
@@ -137,15 +169,18 @@ downloads/
 ```
 
 - `up.json`：记录 up 主名称、uid，以及该 up 主下已下载视频的 BV 号列表（增量、去重、按 BV 号排序）
-- `videos.json`：以 BV 号为 key 记录视频名称、封面、简介、时长与下载更新时间（增量、覆盖、按 BV 号排序）
+- `videos.json`：以 BV 号为 key 记录视频名称、封面、简介、时长、**清晰度**、分辨率、编码、帧率与下载更新时间（增量、覆盖、按 BV 号排序）
+
+其中「清晰度」是根据分辨率换算出来的标签，例如 `1080P`、`1080P60`、`4K`，
+列表页与播放页都会显示。
 
 ## 配置项
 
-可在 `Bilibili/main.py` 顶部修改：
+除 `config.json` 外，`Bilibili/main.py` 顶部还有一些可调常量：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DOWNLOAD_DIR_PATH` | `<项目根>/downloads` | 视频保存目录 |
+| `DOWNLOAD_DIR_PATH` | 取自 `config.json` 的 `download.dir` | 视频保存目录 |
 | `BILIBILI_URL_PREFIX` | `https://www.bilibili.com/video/` | 视频 URL 前缀 |
 | `COOKIE_FILE_PATH` | `cookies.txt` | Cookie 文件路径 |
 | `USER_AGENT` | Chrome/131 | 请求 UA，需伪装成浏览器以绕过风控 |

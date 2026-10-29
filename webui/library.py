@@ -12,7 +12,7 @@ from pathlib import Path
 
 import aiofiles
 
-from Bilibili.main import DOWNLOAD_DIR_PATH, _normalize_duration
+from Bilibili.main import DOWNLOAD_DIR_PATH, _normalize_duration, _normalize_fps
 
 # 视频文件扩展名（按优先级排列，取第一个命中的）
 VIDEO_EXTS = (".mp4", ".webm", ".mkv", ".flv", ".mov", ".m4v", ".ts")
@@ -32,6 +32,10 @@ class VideoItem:
     updated_at: str = ""
     has_video: bool = False
     has_cover: bool = False
+    quality: str = ""
+    resolution: str = ""
+    codec: str = ""
+    fps: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -43,6 +47,10 @@ class VideoItem:
             "updatedAt": self.updated_at,
             "hasVideo": self.has_video,
             "hasCover": self.has_cover,
+            "quality": self.quality,
+            "resolution": self.resolution,
+            "codec": self.codec,
+            "fps": self.fps,
         }
 
 
@@ -133,6 +141,10 @@ def _build_video(folder: Path, bvid: str, record: dict) -> VideoItem:
         updated_at=(record.get("视频下载与更新时间") or ""),
         has_video=video_path is not None,
         has_cover=cover_path is not None,
+        quality=(record.get("视频清晰度") or "").strip(),
+        resolution=(record.get("视频分辨率") or "").strip(),
+        codec=(record.get("视频编码") or "").strip(),
+        fps=_normalize_fps(record.get("视频帧率")),
     )
 
 

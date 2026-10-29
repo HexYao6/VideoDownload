@@ -17,9 +17,11 @@ from curl_cffi import requests
 from yt_dlp.networking.impersonate import ImpersonateTarget
 from yt_dlp.utils import sanitize_filename
 
+import appconfig
+
 # ==================== 可配置变量 ====================
-# 视频下载保存地址（目录），默认为项目根目录下的 downloads 文件夹
-DOWNLOAD_DIR_PATH = str(Path(__file__).resolve().parent.parent / "downloads")
+# 视频下载保存地址（目录），由 config.json 的 download.dir 决定
+DOWNLOAD_DIR_PATH = str(appconfig.download_dir())
 
 # B 站视频 URL 前缀，最终 URL 形如 https://www.bilibili.com/video/BVxxxxxxxxx
 BILIBILI_URL_PREFIX = "https://www.bilibili.com/video/"
@@ -188,18 +190,72 @@ def _apply_cookie_opts(ydl_opts: dict, cookie) -> None:
         print("⚠️ 未提供有效 Cookie，未登录状态下无法下载 1080P60 等大会员画质。")
 
 
-def _check_ffmpeg() -> None:
-    """检查 ffmpeg 是否可用。
+def _check_ffmpeg() -> Path | None:
+    """解析 ffmpeg 可执行文件，缺失时给出明确的安装提示。
 
-    bestvideo+bestaudio 需要 ffmpeg 合并音视频流，缺失时 yt-dlp 会直接中止，
-    这里提前给出明确的安装提示。
+    优先使用项目内 tools/ffmpeg 目录下的 ffmpeg（见 config.json），
+    其次才是系统 PATH 里的。
     """
-    if shutil.which("ffmpeg") is None:
+    ffmpeg = appconfig.ffmpeg_path()
+    if ffmpeg is None:
         raise RuntimeError(
             "未找到 ffmpeg：当前格式 bestvideo+bestaudio 需要 ffmpeg 合并音视频流。\n"
-            "请先安装 ffmpeg（如 apt-get install ffmpeg、brew install ffmpeg），"
+            f"请把 ffmpeg 放到 {appconfig.ffmpeg_dir()}/ 下，"
+            "或安装到系统（apt-get install ffmpeg / brew install ffmpeg），"
+            '也可以在 config.json 里指定 ffmpeg.path，'
             '或改用单一格式（format="best"）。'
         )
+    return ffmpeg
+
+
+def _normalize_codec(value) -> str:
+    """把 yt-dlp 的原始编码串归一化成常见名称。
+
+    例如 av01.0.08M.08.0.110.01.01.01.0 → AV1，avc1.640028 → H.264。
+    """
+    codec = str(value or "").strip().lower()
+    if not codec or codec == "none":
+        return ""
+    for prefix, name in (
+        ("av01", "AV1"),
+        ("avc1", "H.264"),
+        ("avc3", "H.264"),
+        ("hev1", "H.265"),
+        ("hvc1", "H.265"),
+        ("vp09", "VP9"),
+        ("vp9", "VP9"),
+        ("vp08", "VP8"),
+        ("vp8", "VP8"),
+        ("h263", "H.263"),
+        ("mp4v", "MPEG-4"),
+    ):
+        if codec.startswith(prefix):
+            return name
+    return codec
+
+
+def _quality_label(height: int | None, fps: float | None = None) -> str:
+    """把分辨率高度换算成常见清晰度标签，如 1080P60、4K。"""
+    if not height or height <= 0:
+        return ""
+    if height >= 2160:
+        label = "4K"
+    elif height >= 1440:
+        label = "2K"
+    elif height >= 1080:
+        label = "1080P"
+    elif height >= 720:
+        label = "720P"
+    elif height >= 480:
+        label = "480P"
+    elif height >= 360:
+        label = "360P"
+    else:
+        label = f"{height}P"
+    # 高帧率版本补上帧率，如 1080P60
+    if fps and fps >= 50:
+        label += str(int(round(fps)))
+    return label
 
 
 def _extract_with_retry(ydl_opts: dict, video_url: str) -> dict:
@@ -230,7 +286,21 @@ def _normalize_duration(value) -> int | None:
     return int(value)
 
 
-def _build_ydl_opts(outtmpl: str, cookie=None) -> dict:
+def _normalize_fps(value) -> float | None:
+    """把帧率统一成 float（yt-dlp 可能返回 int 或 str）。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _build_ydl_opts(outtmpl: str, cookie=None, progress_hook=None) -> dict:
     """构造 yt-dlp 参数。"""
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
@@ -243,6 +313,14 @@ def _build_ydl_opts(outtmpl: str, cookie=None) -> dict:
         "socket_timeout": SOCKET_TIMEOUT,
         "retries": MAX_RETRIES,
     }
+
+    # 指定项目内的 ffmpeg（tools/ffmpeg），避免依赖系统是否安装
+    ffmpeg = appconfig.ffmpeg_path()
+    if ffmpeg is not None:
+        ydl_opts["ffmpeg_location"] = str(ffmpeg.parent)
+
+    if progress_hook is not None:
+        ydl_opts["progress_hooks"] = [progress_hook]
 
     # 根据可选参数自由切换 Cookie 来源（文件 / 浏览器 / 默认）
     _apply_cookie_opts(ydl_opts, cookie)
@@ -259,7 +337,12 @@ def fetch_video_info(bvid: str, cookie=None) -> dict:
     return _extract_with_retry(ydl_opts, f"{BILIBILI_URL_PREFIX}{bvid}")
 
 
-def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, cookie=None) -> str:
+def download_bilibili_video(
+    bvid: str,
+    download_dir: str = DOWNLOAD_DIR_PATH,
+    cookie=None,
+    progress_hook=None,
+) -> str:
     """根据 BV 号使用 yt-dlp 下载 B 站视频。
 
     - 每个视频按 up 主名称单独建立一个文件夹；
@@ -274,6 +357,8 @@ def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, co
         cookie: Cookie 来源（可选），用于解锁大会员画质。可传：
                 None（默认，回退使用 COOKIE_FILE_PATH）、cookies.txt 文件路径(str)、
                 或浏览器来源元组，如 ("chrome",) / ("edge", "Default", None, None)。
+        progress_hook: 下载进度回调（可选），yt-dlp 每次状态变化都会调用，
+                参数是一个包含 downloaded_bytes / total_bytes / status 等字段的字典。
 
     返回:
         该 up 主文件夹的路径。
@@ -292,7 +377,7 @@ def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, co
     # 输出模板：以 up 主名称作为子文件夹，视频文件以 BV 号命名
     outtmpl = str(Path(download_dir) / "%(uploader)s" / f"{bvid}.%(ext)s")
 
-    ydl_opts = _build_ydl_opts(outtmpl, cookie=cookie)
+    ydl_opts = _build_ydl_opts(outtmpl, cookie=cookie, progress_hook=progress_hook)
 
     print(f"🔗 待下载视频 URL: {video_url}")
 
@@ -323,12 +408,20 @@ def download_bilibili_video(bvid: str, download_dir: str = DOWNLOAD_DIR_PATH, co
     ]
     video_file = video_files[0] if video_files else uploader_dir / f"{bvid}.mp4"
 
-    # 分别写入两个 json：视频明细（videos.json，以 BV号 为 key）+ up 主信息（up.json）
+    # 分别写入两个 json：视频明细（videos.json，以BV号 为 key）+ up 主信息（up.json）
+    width = info.get("width")
+    height = info.get("height")
+    fps = info.get("fps")
+    vcodec = _normalize_codec(info.get("vcodec"))
     video_record = {
         "视频名称": title,
         "视频封面": cover_name,
         "视频简介": (info.get("description") or "").strip(),
         "视频时长": _normalize_duration(info.get("duration")),
+        "视频清晰度": _quality_label(height, fps),
+        "视频分辨率": f"{width}x{height}" if width and height else "",
+        "视频编码": vcodec,
+        "视频帧率": _normalize_fps(fps),
         "视频下载与更新时间": datetime.now().strftime(TIME_FORMAT),
     }
     videos_path = uploader_dir / VIDEO_INFO_FILE_NAME

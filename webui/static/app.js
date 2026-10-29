@@ -46,6 +46,15 @@ function upInitial(name) {
   return (name || '?').trim().slice(0, 1).toUpperCase();
 }
 
+/* 清晰度徽章：优先显示 1080P60 这类标签，完整信息放进 title */
+function qualityBadge(v) {
+  if (!v.quality && !v.resolution) return '';
+  const tip = [v.resolution, v.codec, v.fps ? v.fps + 'fps' : '']
+    .filter(Boolean).join(' · ');
+  const label = v.quality || v.resolution;
+  return `<span class="badge" title="${esc(tip)}">${esc(label)}</span>`;
+}
+
 function clearPoll() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
@@ -138,7 +147,8 @@ function videoCard(v) {
         <div class="card-title">${esc(v.title)}</div>
         ${v.description ? `<div class="card-desc">${esc(v.description)}</div>` : ''}
         <div class="card-meta">
-          ${v.updatedAt ? esc(v.updatedAt) : ''}
+          ${qualityBadge(v)}
+          ${v.updatedAt ? `<span class="meta-time">${esc(v.updatedAt)}</span>` : ''}
           ${v.hasVideo ? '' : ' <span style="color:var(--err)">（无视频文件）</span>'}
         </div>
       </div>
@@ -174,6 +184,7 @@ async function renderVideo(bvid) {
     </div>
     <h2 class="video-title">${esc(data.title)}</h2>
     <div class="video-meta">
+      ${qualityBadge(data)}
       ${esc(data.bvid)}${dur ? ' · ' + dur : ''}${data.updatedAt ? ' · ' + esc(data.updatedAt) : ''}
     </div>
     <div class="video-desc">
@@ -184,113 +195,192 @@ async function renderVideo(bvid) {
 
 /* ---------------- 视图：下载页 ---------------- */
 
+function parseBvids(text) {
+  /* 支持空格 / 逗号 / 换行 / 分号分隔的多个 BV 号 */
+  return String(text || '')
+    .split(/[\s,;，、]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 function renderDownload() {
   app.innerHTML = `
-    <div class="page-head"><h1>下载视频</h1><span class="sub">输入 B 站 BV 号</span></div>
+    <div class="page-head"><h1>下载视频</h1><span class="sub">可一次提交多个，支持并行下载</span></div>
     <div class="panel">
       <form class="download-form" id="download-form">
-        <input type="text" id="bvid-input" placeholder="BV1dfJk6hEjX" autocomplete="off" spellcheck="false">
+        <input type="text" id="bvid-input" placeholder="BV1dfJk6hEjX（可用空格/逗号分隔多个）"
+               autocomplete="off" spellcheck="false">
         <button class="primary" type="submit" id="download-btn">开始下载</button>
       </form>
+
+      <div class="pick-row">
+        <select id="pick-select">
+          <option value="">— 从已有视频库中选择 —</option>
+        </select>
+        <button class="ghost" type="button" id="pick-btn">加入队列</button>
+      </div>
+
       <p class="hint">下载会请求 B 站接口，风控较强时可能需要重试若干次，请耐心等待。</p>
       <div id="download-status"></div>
+    </div>
+
+    <div class="page-head" style="margin-top:28px">
+      <h1 style="font-size:18px">下载队列</h1>
+      <span class="sub" id="queue-summary"></span>
+    </div>
+    <div id="task-list" class="task-list">
+      <div class="loading">加载中…</div>
     </div>`;
 
   const form = document.getElementById('download-form');
   const input = document.getElementById('bvid-input');
   const button = document.getElementById('download-btn');
-  const statusBox = document.getElementById('download-status');
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const bvid = input.value.trim();
-    if (!bvid) return;
-
-    clearPoll();
-    button.disabled = true;
-    statusBox.innerHTML = `
-      <div class="status">
-        <div class="status-bar"><span class="dot running"></span><span>正在提交…</span></div>
-        <pre class="log"></pre>
-      </div>`;
-
-    let task;
-    try {
-      task = await api('/api/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bvid }),
-      });
-    } catch (err) {
-      button.disabled = false;
-      statusBox.innerHTML = `
-        <div class="status">
-          <div class="status-bar"><span class="dot failed"></span><span>提交失败</span></div>
-          <pre class="log"><span class="err">${esc(err.message)}</span></pre>
-        </div>`;
-      return;
-    }
-
-    button.disabled = false;
-    pollTask(task.taskId, 0);
+    const bvids = parseBvids(input.value);
+    if (!bvids.length) { input.focus(); return; }
+    await submitDownloads(bvids);
+    input.value = '';
   });
+
+  document.getElementById('pick-btn').addEventListener('click', async () => {
+    const bvid = document.getElementById('pick-select').value;
+    if (!bvid) return;
+    await submitDownloads([bvid]);
+  });
+
+  // 下拉框内容来自视频库，方便重新下载（例如换了 cookie 后想要更高画质）
+  loadPickerOptions();
+  refreshTasks();
+  startTaskPolling();
 }
 
-function pollTask(taskId, offset) {
-  clearPoll();
-  const statusBox = document.getElementById('download-status');
-  if (!statusBox) return;
-
-  pollTimer = setInterval(async () => {
-    let task;
-    try {
-      task = await api(`/api/download/${taskId}?offset=${offset}`);
-    } catch (err) {
-      clearPoll();
-      statusBox.innerHTML = `
-        <div class="status">
-          <div class="status-bar"><span class="dot failed"></span><span>查询失败</span></div>
-          <pre class="log"><span class="err">${esc(err.message)}</span></pre>
-        </div>`;
-      return;
-    }
-
-    offset = task.logOffset;
-    const label = {
-      pending: '排队中', running: '下载中', success: '下载完成', failed: '下载失败',
-    }[task.status] || task.status;
-
-    const logHtml = (task.logs || []).map((line) => {
-      const bad = /失败|ERROR|error|异常/.test(line);
-      return bad ? `<span class="err">${esc(line)}</span>` : esc(line);
-    }).join('\n');
-
-    const done = task.status === 'success' || task.status === 'failed';
-    const link = task.status === 'success'
-      ? `<div style="padding:0 16px 14px"><a class="btn-link" href="/v/${encodeURIComponent(task.bvid)}">→ 前往播放页</a></div>`
-      : '';
-
-    statusBox.innerHTML = `
-      <div class="status">
-        <div class="status-bar">
-          <span class="dot ${esc(task.status)}"></span>
-          <span>${esc(label)} · ${esc(task.bvid)}</span>
-        </div>
-        <pre class="log" id="log-box">${logHtml}</pre>
-        ${link}
-      </div>`;
-
-    const logBox = document.getElementById('log-box');
-    if (logBox) logBox.scrollTop = logBox.scrollHeight;
-
-    if (done) {
-      clearPoll();
-      if (task.error) {
-        statusBox.innerHTML = statusBox.innerHTML.replace(
-          '</pre>', `<span class="err">${esc(task.error)}</span></pre>`);
+async function loadPickerOptions() {
+  const select = document.getElementById('pick-select');
+  if (!select) return;
+  try {
+    const data = await api('/api/library');
+    const groups = data.uploaders || [];
+    let html = '<option value="">— 从已有视频库中选择 —</option>';
+    for (const u of groups) {
+      const videos = u.videos || [];
+      if (!videos.length) continue;
+      html += `<optgroup label="${esc(u.name)}">`;
+      for (const v of videos) {
+        const tag = v.quality ? ` · ${v.quality}` : '';
+        html += `<option value="${esc(v.bvid)}">${esc(v.title.slice(0, 40))}${esc(tag)}</option>`;
       }
+      html += '</optgroup>';
     }
-  }, 1500);
+    select.innerHTML = html;
+  } catch (err) {
+    select.innerHTML = '<option value="">（视频库加载失败）</option>';
+  }
+}
+
+async function submitDownloads(bvids) {
+  const button = document.getElementById('download-btn');
+  const box = document.getElementById('download-status');
+  if (button) button.disabled = true;
+  if (box) box.innerHTML = `<div class="notice">正在提交 ${bvids.length} 个下载任务…</div>`;
+
+  try {
+    const result = await api('/api/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bvids }),
+    });
+    if (box) {
+      const invalid = result.invalid || [];
+      box.innerHTML = invalid.length
+        ? `<div class="notice err">已忽略无效 BV 号：${esc(invalid.join(', '))}</div>`
+        : `<div class="notice">已加入队列：${esc(bvids.join(', '))}</div>`;
+    }
+    await refreshTasks();
+  } catch (err) {
+    if (box) box.innerHTML = `<div class="notice err">提交失败：${esc(err.message)}</div>`;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function refreshTasks() {
+  const list = document.getElementById('task-list');
+  if (!list) return;
+  let tasks;
+  try {
+    const data = await api('/api/downloads');
+    tasks = data.tasks || [];
+  } catch (err) {
+    list.innerHTML = `<div class="notice err">加载队列失败：${esc(err.message)}</div>`;
+    return;
+  }
+
+  const summary = document.getElementById('queue-summary');
+  if (summary) {
+    const running = tasks.filter((t) => t.status === 'running' || t.status === 'pending').length;
+    summary.textContent = tasks.length
+      ? `${tasks.length} 个任务 · ${running} 个进行中`
+      : '';
+  }
+
+  if (!tasks.length) {
+    list.innerHTML = '<div class="empty small"><div class="big">📭</div>队列里还没有任务</div>';
+    return;
+  }
+  list.innerHTML = tasks.map(taskRow).join('');
+}
+
+function taskRow(t) {
+  const pct = Math.max(0, Math.min(100, t.percent || 0));
+  const running = t.status === 'running' || t.status === 'pending';
+  const phase = t.phase || '';
+  const parts = [];
+  if (t.total) parts.push(`${fmtBytes(t.downloaded)} / ${fmtBytes(t.total)}`);
+  if (t.speed) parts.push(`${fmtBytes(t.speed)}/s`);
+  if (t.eta != null && t.eta >= 0) parts.push(`剩余 ${fmtEta(t.eta)}`);
+
+  const link = t.status === 'success'
+    ? `<a class="btn-link" href="/v/${encodeURIComponent(t.bvid)}">前往播放页 →</a>`
+    : '';
+
+  const err = t.error ? `<div class="task-err">${esc(t.error)}</div>` : '';
+
+  return `
+    <div class="task ${esc(t.status)}">
+      <div class="task-head">
+        <span class="dot ${esc(t.status)}"></span>
+        <span class="task-title">${esc(t.title || t.bvid)}</span>
+        <span class="task-bvid">${esc(t.bvid)}</span>
+        ${t.quality ? `<span class="badge">${esc(t.quality)}</span>` : ''}
+        ${t.uploader ? `<span class="task-up">${esc(t.uploader)}</span>` : ''}
+        <span class="task-phase">${esc(phase)}</span>
+      </div>
+      <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
+      <div class="task-foot">
+        <span>${pct.toFixed(1)}%</span>
+        <span class="task-detail">${esc(parts.join(' · '))}</span>
+        ${link}
+      </div>
+      ${err}
+    </div>`;
+}
+
+function fmtEta(seconds) {
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分 ${s % 60} 秒`;
+  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+}
+
+function startTaskPolling() {
+  clearPoll();
+  pollTimer = setInterval(() => {
+    if (!document.getElementById('task-list')) { clearPoll(); return; }
+    refreshTasks();
+  }, 1200);
 }
 
 /* ---------------- 路由 ---------------- */

@@ -13,11 +13,18 @@ import argparse
 import json
 from pathlib import Path
 
-from Bilibili.main import DOWNLOAD_DIR_PATH, _normalize_duration, fetch_video_info
+from Bilibili.main import (
+    DOWNLOAD_DIR_PATH,
+    _normalize_codec,
+    _normalize_duration,
+    _normalize_fps,
+    _quality_label,
+    fetch_video_info,
+)
 
 VIDEO_INFO_FILE_NAME = "videos.json"
-# 已经记录了简介的视频视为最新，无需重复请求接口
-NEED_KEY = "视频简介"
+# 这些字段都补齐后视为最新，无需重复请求接口
+NEED_KEYS = ("视频简介", "视频清晰度")
 
 
 def _read_json(path: Path) -> dict:
@@ -50,7 +57,7 @@ def backfill(download_dir: str | Path | None = None, force: bool = False) -> int
         for bvid, record in list(records.items()):
             if not isinstance(record, dict):
                 continue
-            if not force and (record.get(NEED_KEY) or record.get("视频时长")):
+            if not force and all(record.get(key) for key in NEED_KEYS):
                 continue
 
             print(f"→ 回填 {folder.name}/{bvid} …")
@@ -62,11 +69,24 @@ def backfill(download_dir: str | Path | None = None, force: bool = False) -> int
 
             description = (info.get("description") or "").strip()
             duration = _normalize_duration(info.get("duration"))
+            width, height = info.get("width"), info.get("height")
+            fps = _normalize_fps(info.get("fps"))
+            quality = _quality_label(height, fps)
+
             # 只补空字段，不覆盖已有内容
-            if description and not record.get(NEED_KEY):
-                record[NEED_KEY] = description
+            if description and not record.get("视频简介"):
+                record["视频简介"] = description
             if duration and not record.get("视频时长"):
                 record["视频时长"] = duration
+            if quality and not record.get("视频清晰度"):
+                record["视频清晰度"] = quality
+            if width and height and not record.get("视频分辨率"):
+                record["视频分辨率"] = f"{width}x{height}"
+            if info.get("vcodec"):
+                # 归一化后直接覆盖，顺便修正早期写入的原始编码串
+                record["视频编码"] = _normalize_codec(info.get("vcodec"))
+            if fps and not record.get("视频帧率"):
+                record["视频帧率"] = fps
             changed = True
             updated += 1
 
